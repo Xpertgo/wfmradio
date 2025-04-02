@@ -92,6 +92,34 @@ select:focus {
     background-repeat: no-repeat;
     background-position: 10px center;
     background-size: 24px 16px;
+    color: #000000;
+}
+#languageSelect option {
+    padding-left: 40px;
+    background-repeat: no-repeat;
+    background-position: 10px center;
+    background-size: 24px 16px;
+    color: #000000;
+}
+#stationSelect option {
+    padding-left: 40px;
+    background-repeat: no-repeat;
+    background-position: 10px center;
+    background-size: 24px 16px;
+    color: #000000;
+}
+
+/* Add these new styles for vote-based coloring */
+#stationSelect option.high-votes {
+    color: #00ff00 !important;  /* Green for stations with >100 votes */
+}
+
+#stationSelect option.low-votes {
+    color: #ff0000 !important;  /* Red for stations with <10 votes */
+}
+
+#stationSelect option.medium-votes {
+    color: #000000 !important;  /* Black for stations with 10-100 votes */
 }
 
 button {
