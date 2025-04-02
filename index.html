@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="theme-color" content="#0d1b2a">
+    <title>World FM Radio</title>
+    <link rel="manifest" href="/manifest.json">
+    <link rel="preload" href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;600;700&display=swap" as="style" onload="this.rel='stylesheet'">
+    <noscript>
+        <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;600;700&display=swap" rel="stylesheet">
+    </noscript>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div class="container">
+        <h1>World FM Radio</h1>
+        
+        <div class="controls">
+            <div class="control-group">
+                <label for="countrySelect">Country:</label>
+                <select id="countrySelect" aria-label="Select Country">
+                    <option value="">Select Country</option>
+                </select>
+            </div>
+            <div class="control-group">
+                <label for="languageSelect">Language:</label>
+                <select id="languageSelect" disabled aria-label="Select Language">
+                    <option value="">Select country first</option>
+                </select>
+            </div>
+            <div class="control-group">
+                <label for="stationSelect">Station:</label>
+                <select id="stationSelect" disabled aria-label="Select Station">
+                    <option value="">Loading stations...</option>
+                </select>
+            </div>
+        </div>
+
+        <div class="loading" id="loading" aria-live="polite">
+            <i class="fas fa-spinner fa-spin"></i> Loading...
+        </div>
+        <div id="errorContainer" aria-live="assertive"></div>
+
+        <div class="player">
+            <div class="now-playing" id="nowPlaying"><span>Select a station to play</span></div>
+            <div class="player-controls">
+                <button id="previousBtn" disabled aria-label="Previous Station"><i class="fas fa-step-backward"></i></button>
+                <button id="playPauseBtn" disabled aria-label="Play/Pause"><i class="fas fa-play"></i></button>
+                <button id="stopBtn" disabled aria-label="Stop"><i class="fas fa-stop"></i></button>
+                <button id="nextBtn" disabled aria-label="Next Station"><i class="fas fa-step-forward"></i></button>
+            </div>
+            <div class="volume-control">
+                <button id="muteBtn" aria-label="Mute/Unmute"><i class="fas fa-volume-up"></i></button>
+                <input type="range" id="volume" min="0" max="1" step="0.01" value="1" aria-label="Volume">
+                <span id="volumeLevel">100%</span>
+            </div>
+        </div>
+    </div>
+
+    <script defer src="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/js/all.min.js"></script>
+    <script src="script.js"></script>
+</body>
+</html>
