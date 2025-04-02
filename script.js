@@ -7,14 +7,14 @@ const MAX_RETRIES = 3;
 const MIN_STATION_COUNT = 1;
 const TEST_STREAM_TIMEOUT = 2000;
 const SKIP_STREAM_TEST = true;
-const BATCH_SIZE = 100;
+const BATCH_SIZE = 20;
 const HEARTBEAT_INTERVAL = 60000;
 const BASE_RECONNECT_DELAY = 500;
 const DELAY_INCREMENT = 500;
 const MAX_RECONNECT_DELAY = 10000;
 const MAX_RECONNECT_ATTEMPTS = 5;
 const CACHE_KEY = 'world_fm_radio_stations';
-const CACHE_DURATION = 60 * 60 * 1000;
+const CACHE_DURATION = 6 * 60 * 60 * 1000;
 const NOTIFICATION_TITLE = 'World FM Radio';
 
 const audio = new Audio();
@@ -157,7 +157,7 @@ function getAudioErrorMessage(error) {
         case MediaError.MEDIA_ERR_ABORTED:
             return 'Playback was aborted.';
         case MediaError.MEDIA_ERR_NETWORK:
-            return 'Network error: Couldn’t load the stream.\nCheck your connection.';
+            return 'Network error: Could not load the stream.\nCheck your connection.';
         case MediaError.MEDIA_ERR_DECODE:
             return 'Stream decoding error: Format may be unsupported.';
         case MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED:
@@ -495,7 +495,13 @@ async function fetchAndDisplayAllStations(countryCode) {
                 const option = document.createElement('option');
                 option.value = index;
                 option.textContent = `${station.name} ${station.bitrate ? `(${station.bitrate}kbps)` : ''}`;
-                option.style.color = station.votes > 100 ? '#00ff00' : station.votes < 10 ? '#ff0000' : 'inherit';
+                if (station.votes > 100) {
+                    option.classList.add('high-votes');
+                } else if (station.votes < 10) {
+                    option.classList.add('low-votes');
+                } else {
+                    option.classList.add('medium-votes');
+                }
                 fragment.appendChild(option);
             }
             stationSelect.appendChild(fragment);
@@ -640,7 +646,13 @@ function filterStationsByLanguage(language) {
             const option = document.createElement('option');
             option.value = index;
             option.textContent = `${station.name} ${station.bitrate ? `(${station.bitrate}kbps)` : ''}`;
-            option.style.color = station.votes > 100 ? '#00ff00' : station.votes < 10 ? '#ff0000' : 'inherit';
+            if (station.votes > 100) {
+                option.classList.add('high-votes');
+            } else if (station.votes < 10) {
+                option.classList.add('low-votes');
+            } else {
+                option.classList.add('medium-votes');
+            }
             fragment.appendChild(option);
         }
         stationSelect.appendChild(fragment);
@@ -675,6 +687,7 @@ async function playStation(station) {
     reconnectAttempts = 0;
 
     try {
+        // Always reset and reload the stream to ensure live playback
         audio.pause();
         audio.src = '';
         audio.currentTime = 0;
@@ -716,7 +729,7 @@ async function playStation(station) {
             }
         }
 
-        console.log('Playing URL:', workingUrl);
+        console.log('Playing live URL:', workingUrl);
         audio.src = workingUrl;
         audio.volume = document.getElementById('volume').value;
 
@@ -979,20 +992,8 @@ document.getElementById('playPauseBtn').addEventListener('click', async () => {
             stopHeartbeat();
             console.log('Paused audio');
         } else {
-            if (!audio.src || hasError) {
-                console.log('Audio source lost or error occurred, reloading station');
-                await playStation(currentStation);
-            } else {
-                console.log('Resuming audio from current live position');
-                audio.volume = document.getElementById('volume').value;
-                await audio.play().catch(err => {
-                    throw new Error(`Resume failed: ${err.message}`);
-                });
-                isPlaying = true;
-                startHeartbeat();
-                console.log('Resumed audio from current time');
-            }
-            clearError();
+            console.log('Starting live playback for station');
+            await playStation(currentStation); // Always reload the stream for live playback
         }
         updatePlayerDisplay();
     } catch (error) {
