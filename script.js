@@ -14,7 +14,7 @@ const DELAY_INCREMENT = 500;
 const MAX_RECONNECT_DELAY = 10000;
 const MAX_RECONNECT_ATTEMPTS = 5;
 const CACHE_KEY = 'world_fm_radio_stations';
-const CACHE_DURATION = 6 * 60 * 60 * 1000;
+const CACHE_DURATION = 60 * 60 * 1000;
 const NOTIFICATION_TITLE = 'World FM Radio';
 
 const audio = new Audio();
