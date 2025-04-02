@@ -181,9 +181,10 @@ audio.addEventListener('playing', () => {
     isPlaying = true;
     hasError = false;
     reconnectAttempts = 0;
+    isRetrying = false; // Reset retry state when playing starts
     updatePlayerDisplay();
     clearError();
-    showLoading(false);
+    showLoading(false); // Ensure the "Connecting" message is hidden
     startHeartbeat();
     updateMediaSession();
     if (currentStation) showRadioNotification(currentStation);
@@ -685,6 +686,7 @@ async function playStation(station) {
     clearError();
     hasError = false;
     reconnectAttempts = 0;
+    isRetrying = false; // Reset retry state at the start
 
     try {
         // Always reset and reload the stream to ensure live playback
@@ -766,15 +768,26 @@ async function playStation(station) {
         currentStation = null;
         updatePlayerDisplay();
     } finally {
-        showLoading(false);
+        // Only hide loading if not retrying
+        if (!isRetrying) {
+            showLoading(false);
+        }
     }
 }
 
 function showLoading(show) {
     const loading = document.getElementById('loading');
     const player = document.querySelector('.player');
+    
+    // Add safety checks to ensure elements exist
+    if (!loading || !player) {
+        console.error('Loading or player element not found in DOM');
+        return;
+    }
+
     loading.style.display = show ? 'block' : 'none';
     player.classList.toggle('connecting', show);
+    console.log(`Loading state updated: ${show ? 'Showing' : 'Hiding'} connecting message`);
 }
 
 function showError(message, showRetry = false) {
@@ -901,7 +914,9 @@ async function attemptReconnect() {
         console.log('Max reconnect attempts reached, giving up.');
         isPlaying = false;
         hasError = true;
+        isRetrying = false;
         showError(`Failed to reconnect to ${currentStation.name} after ${MAX_RECONNECT_ATTEMPTS} attempts.\nPlease try again or select another station.`, true);
+        showLoading(false); // Ensure loading is hidden after max attempts
         updatePlayerDisplay();
         return;
     }
@@ -911,7 +926,7 @@ async function attemptReconnect() {
     console.log(`Attempting to reconnect (${reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS}), waiting ${delay}ms...`);
 
     isRetrying = true;
-    showLoading(true);
+    showLoading(true); // Show "Connecting" during retry
     updatePlayerDisplay();
 
     await new Promise(resolve => setTimeout(resolve, delay));
@@ -925,13 +940,10 @@ async function attemptReconnect() {
         } else {
             isPlaying = false;
             hasError = true;
+            isRetrying = false;
             showError(`Failed to reconnect to ${currentStation.name} after ${MAX_RECONNECT_ATTEMPTS} attempts.\n${error.message}\nPlease try again or select another station.`, true);
+            showLoading(false); // Ensure loading is hidden after max attempts
             updatePlayerDisplay();
-        }
-    } finally {
-        isRetrying = false;
-        if (reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
-            showLoading(false);
         }
     }
 }
