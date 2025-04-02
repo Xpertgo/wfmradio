@@ -6,15 +6,15 @@ const API_SERVERS = [
 const MAX_RETRIES = 3;
 const MIN_STATION_COUNT = 1;
 const TEST_STREAM_TIMEOUT = 2000;
-const SKIP_STREAM_TEST = true;
+const SKIP_STREAM_TEST = true; // Changed to false to enable stream testing
 const BATCH_SIZE = 100;
-const HEARTBEAT_INTERVAL = 60000;
+const HEARTBEAT_INTERVAL = 10000;
 const BASE_RECONNECT_DELAY = 500;
 const DELAY_INCREMENT = 500;
 const MAX_RECONNECT_DELAY = 10000;
 const MAX_RECONNECT_ATTEMPTS = 5;
 const CACHE_KEY = 'world_fm_radio_stations';
-const CACHE_DURATION = 60 * 60 * 1000;
+const CACHE_DURATION = 1 * 60 * 60 * 1000;
 const NOTIFICATION_TITLE = 'World FM Radio';
 
 const audio = new Audio();
@@ -27,6 +27,7 @@ let heartbeatTimer = null;
 let reconnectAttempts = 0;
 let isRetrying = false;
 let lastError = { message: null, showRetry: false };
+let currentUrlIndex = 0; // Track which URL we're trying for the station
 
 const LANGUAGE_NORMALIZATION = {
     'arabic': 'Arabic', 'arabe': 'Arabic', 'العربية': 'Arabic', 'modern standard arabic': 'Arabic',
@@ -161,7 +162,7 @@ function getAudioErrorMessage(error) {
         case MediaError.MEDIA_ERR_DECODE:
             return 'Stream decoding error: Format may be unsupported.';
         case MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED:
-            return 'Playback interrupted \nStream not supported: Invalid or unavailable source.';
+            return 'Stream not supported: Invalid or unavailable source.';
         default:
             return `Playback error (Code ${audioError.code}): ${audioError.message || 'Unknown issue.'}`;
     }
@@ -181,10 +182,11 @@ audio.addEventListener('playing', () => {
     isPlaying = true;
     hasError = false;
     reconnectAttempts = 0;
-    isRetrying = false; // Reset retry state when playing starts
+    currentUrlIndex = 0; // Reset URL index when playback starts
+    isRetrying = false;
     updatePlayerDisplay();
     clearError();
-    showLoading(false); // Ensure the "Connecting" message is hidden
+    showLoading(false);
     startHeartbeat();
     updateMediaSession();
     if (currentStation) showRadioNotification(currentStation);
@@ -225,6 +227,9 @@ audio.addEventListener('stalled', () => {
     if (currentStation && isPlaying) {
         showError(`Stream stalled for ${currentStation.name}.\nAttempting to reconnect...`, false);
         attemptReconnect();
+    } else {
+        showError(`Stream stalled.\nSelect a station to play.`, false);
+        showLoading(false);
     }
 });
 
@@ -270,8 +275,8 @@ async function showRadioNotification(station) {
     const registration = await navigator.serviceWorker.ready;
     const options = {
         body: `Now Playing: ${station.name}${station.language ? ` (${normalizeLanguage(station.language)})` : ''}`,
-        icon: 'https://via.placeholder.com/96x96', // Replace with your app icon
-        badge: 'https://via.placeholder.com/96x96', // Small icon for notification
+        icon: 'https://via.placeholder.com/96x96',
+        badge: 'https://via.placeholder.com/96x96',
         actions: [
             { action: 'previous', title: 'Previous', icon: 'https://via.placeholder.com/64x64' },
             { action: isPlaying ? 'pause' : 'play', title: isPlaying ? 'Pause' : 'Play', icon: 'https://via.placeholder.com/64x64' },
@@ -674,6 +679,12 @@ async function testStream(url) {
         const timeoutId = setTimeout(() => controller.abort(), TEST_STREAM_TIMEOUT);
         const response = await fetch(url, { method: 'HEAD', signal: controller.signal });
         clearTimeout(timeoutId);
+        const contentType = response.headers.get('Content-Type') || '';
+        // Check if the content type is audio-related
+        if (!contentType.includes('audio') && !contentType.includes('application/ogg') && !contentType.includes('application/x-mpegURL')) {
+            console.warn(`Stream URL ${url} has unsupported content type: ${contentType}`);
+            return false;
+        }
         return response.ok;
     } catch (error) {
         console.error('Stream test failed for URL:', url, error);
@@ -686,49 +697,69 @@ async function playStation(station) {
     clearError();
     hasError = false;
     reconnectAttempts = 0;
-    isRetrying = false; // Reset retry state at the start
+    currentUrlIndex = 0; // Reset URL index for this station
+    isRetrying = false;
 
     try {
-        // Always reset and reload the stream to ensure live playback
+        // Reset audio
         audio.pause();
         audio.src = '';
         audio.currentTime = 0;
 
-        let workingUrl = station.url_resolved || station.url;
-        console.log('Initial URL:', workingUrl);
-
-        if (workingUrl.endsWith('.m3u') || workingUrl.endsWith('.pls')) {
-            console.log('Detected playlist file, fetching and parsing:', workingUrl);
-            const response = await fetch(workingUrl);
-            if (!response.ok) throw new Error(`Failed to fetch playlist: ${response.statusText}`);
-            const text = await response.text();
-            const lines = text.split('\n');
-            let foundStreamUrl = false;
-            for (const line of lines) {
-                if (line.trim().startsWith('http')) {
-                    workingUrl = line.trim();
-                    foundStreamUrl = true;
-                    console.log('Extracted stream URL from playlist:', workingUrl);
-                    break;
-                }
-            }
-            if (!foundStreamUrl) throw new Error('No valid stream URL found in playlist file');
+        // Prepare all possible URLs for the station
+        const urlsToTry = [station.url_resolved || station.url];
+        if (station.url_alt && Array.isArray(station.url_alt)) {
+            urlsToTry.push(...station.url_alt.filter(url => url && url.startsWith('http')));
         }
 
-        if (!SKIP_STREAM_TEST) {
-            const urlsToTry = [workingUrl, ...(station.url_alt || []).filter(url => url)].filter(url => url && url.startsWith('http'));
-            let streamTestPassed = false;
-            for (const url of urlsToTry) {
-                console.log('Testing URL:', url);
-                if (await testStream(url)) {
-                    workingUrl = url;
-                    streamTestPassed = true;
-                    break;
+        let workingUrl = null;
+        for (let i = currentUrlIndex; i < urlsToTry.length; i++) {
+            currentUrlIndex = i;
+            let url = urlsToTry[i];
+            console.log(`Trying URL ${i + 1}/${urlsToTry.length}:`, url);
+
+            // Handle playlist files (.m3u, .pls)
+            if (url.endsWith('.m3u') || url.endsWith('.pls')) {
+                console.log('Detected playlist file, fetching and parsing:', url);
+                try {
+                    const response = await fetch(url);
+                    if (!response.ok) throw new Error(`Failed to fetch playlist: ${response.statusText}`);
+                    const text = await response.text();
+                    const lines = text.split('\n');
+                    let foundStreamUrl = false;
+                    for (const line of lines) {
+                        if (line.trim().startsWith('http')) {
+                            url = line.trim();
+                            foundStreamUrl = true;
+                            console.log('Extracted stream URL from playlist:', url);
+                            break;
+                        }
+                    }
+                    if (!foundStreamUrl) throw new Error('No valid stream URL found in playlist file');
+                } catch (error) {
+                    console.error('Failed to parse playlist:', error);
+                    continue; // Try the next URL
                 }
             }
-            if (!streamTestPassed) {
-                throw new Error('No working stream URL found after testing');
+
+            // Test the stream URL
+            if (!SKIP_STREAM_TEST) {
+                console.log('Testing stream URL:', url);
+                if (await testStream(url)) {
+                    workingUrl = url;
+                    break;
+                } else {
+                    console.warn(`Stream test failed for URL: ${url}`);
+                    continue; // Try the next URL
+                }
+            } else {
+                workingUrl = url;
+                break; // Skip testing and use the first URL
             }
+        }
+
+        if (!workingUrl) {
+            throw new Error('No working stream URL found after testing all available URLs');
         }
 
         console.log('Playing live URL:', workingUrl);
@@ -763,12 +794,16 @@ async function playStation(station) {
     } catch (error) {
         console.error('Play error:', error);
         hasError = true;
-        showError(`Can't play ${station.name}.\n${error.message}\nCheck your connection or try another station.`, false);
-        isPlaying = false;
-        currentStation = null;
-        updatePlayerDisplay();
+        if (currentUrlIndex < (urlsToTry.length - 1)) {
+            // Try the next URL if available
+            showError(`Failed to play ${station.name} with current URL.\nTrying next URL...`, false);
+            attemptReconnect();
+        } else {
+            // No more URLs to try, skip to the next station
+            showError(`Can't play ${station.name}.\n${error.message}\nSkipping to the next station...`, false);
+            nextStation();
+        }
     } finally {
-        // Only hide loading if not retrying
         if (!isRetrying) {
             showLoading(false);
         }
@@ -779,7 +814,6 @@ function showLoading(show) {
     const loading = document.getElementById('loading');
     const player = document.querySelector('.player');
     
-    // Add safety checks to ensure elements exist
     if (!loading || !player) {
         console.error('Loading or player element not found in DOM');
         return;
@@ -911,13 +945,27 @@ async function attemptReconnect() {
     }
 
     if (reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
-        console.log('Max reconnect attempts reached, giving up.');
-        isPlaying = false;
-        hasError = true;
-        isRetrying = false;
-        showError(`Failed to reconnect to ${currentStation.name} after ${MAX_RECONNECT_ATTEMPTS} attempts.\nPlease try again or select another station.`, true);
-        showLoading(false); // Ensure loading is hidden after max attempts
-        updatePlayerDisplay();
+        console.log('Max reconnect attempts reached for current URL, checking for alternative URLs...');
+        const urlsToTry = [currentStation.url_resolved || currentStation.url];
+        if (currentStation.url_alt && Array.isArray(currentStation.url_alt)) {
+            urlsToTry.push(...currentStation.url_alt.filter(url => url && url.startsWith('http')));
+        }
+
+        if (currentUrlIndex < urlsToTry.length - 1) {
+            // Try the next URL
+            currentUrlIndex++;
+            reconnectAttempts = 0; // Reset attempts for the new URL
+            showError(`Failed to reconnect to ${currentStation.name} with current URL.\nTrying next URL...`, false);
+            await playStation(currentStation);
+        } else {
+            // No more URLs to try, skip to the next station
+            isPlaying = false;
+            hasError = true;
+            isRetrying = false;
+            showError(`Failed to play ${currentStation.name} after trying all URLs.\nSkipping to the next station...`, false);
+            showLoading(false);
+            nextStation();
+        }
         return;
     }
 
@@ -926,7 +974,7 @@ async function attemptReconnect() {
     console.log(`Attempting to reconnect (${reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS}), waiting ${delay}ms...`);
 
     isRetrying = true;
-    showLoading(true); // Show "Connecting" during retry
+    showLoading(true);
     updatePlayerDisplay();
 
     await new Promise(resolve => setTimeout(resolve, delay));
@@ -937,13 +985,6 @@ async function attemptReconnect() {
         console.error(`Reconnect attempt ${reconnectAttempts} failed:`, error);
         if (reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
             attemptReconnect();
-        } else {
-            isPlaying = false;
-            hasError = true;
-            isRetrying = false;
-            showError(`Failed to reconnect to ${currentStation.name} after ${MAX_RECONNECT_ATTEMPTS} attempts.\n${error.message}\nPlease try again or select another station.`, true);
-            showLoading(false); // Ensure loading is hidden after max attempts
-            updatePlayerDisplay();
         }
     }
 }
@@ -958,9 +999,8 @@ function stopPlayback() {
     updatePlayerDisplay();
     clearError();
     closeNotification();
-    // Reset the station dropdown to "Select Station"
     const stationSelect = document.getElementById('stationSelect');
-    stationSelect.value = ''; // Reset to default option
+    stationSelect.value = '';
 }
 
 function previousStation() {
@@ -979,6 +1019,11 @@ function nextStation() {
     if (currentIndex < stations.length - 1) {
         stationSelect.value = currentIndex + 1;
         const station = stations[currentIndex + 1];
+        playStation(station);
+    } else {
+        // If at the end of the list, loop back to the first station
+        stationSelect.value = 0;
+        const station = stations[0];
         playStation(station);
     }
 }
@@ -1005,7 +1050,7 @@ document.getElementById('playPauseBtn').addEventListener('click', async () => {
             console.log('Paused audio');
         } else {
             console.log('Starting live playback for station');
-            await playStation(currentStation); // Always reload the stream for live playback
+            await playStation(currentStation);
         }
         updatePlayerDisplay();
     } catch (error) {
