@@ -933,6 +933,9 @@ function stopPlayback() {
     updatePlayerDisplay();
     clearError();
     closeNotification();
+    // Reset the station dropdown to "Select Station"
+    const stationSelect = document.getElementById('stationSelect');
+    stationSelect.value = ''; // Reset to default option
 }
 
 function previousStation() {
