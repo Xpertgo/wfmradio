@@ -1,179 +1,77 @@
+import { LANGUAGE_NORMALIZATION } from './languageNormalization.js';
+import { STATIC_COUNTRIES } from './staticCountries.js';
+
 const API_SERVERS = [
     'https://all.api.radio-browser.info',
     'https://fi1.api.radio-browser.info',
     'https://de2.api.radio-browser.info'
 ];
 const MAX_RETRIES = 3;
-const MIN_STATION_COUNT = 1;
 const TEST_STREAM_TIMEOUT = 2000;
-const SKIP_STREAM_TEST = true; // Changed to false to enable stream testing
-const BATCH_SIZE = 100;
+const SKIP_STREAM_TEST = true; // Set to false for debugging
+const BATCH_SIZE = 50;
 const HEARTBEAT_INTERVAL = 10000;
-const BASE_RECONNECT_DELAY = 500;
-const DELAY_INCREMENT = 500;
-const MAX_RECONNECT_DELAY = 10000;
-const MAX_RECONNECT_ATTEMPTS = 5;
 const CACHE_KEY = 'world_fm_radio_stations';
 const CACHE_DURATION = 1 * 60 * 60 * 1000;
-const NOTIFICATION_TITLE = 'World FM Radio';
+const AUDIO_ERROR_RETRY_DELAY = 2000;
+const MAX_AUDIO_ERROR_RETRIES = 5;
+const INIT_RETRY_DELAY = 2000;
+
+// Fallback test station for debugging
+const FALLBACK_STATION = {
+    name: "Test Station (Fallback)",
+    url: "http://stream.zeno.fm/5z7v8k3v0zquv", // Known working public stream
+    language: "English",
+    bitrate: 128
+};
 
 const audio = new Audio();
 let currentStation = null;
 let isPlaying = false;
 let hasError = false;
+let isLoading = false;
 let countryStations = [];
 let stations = [];
 let heartbeatTimer = null;
-let reconnectAttempts = 0;
-let isRetrying = false;
-let lastError = { message: null, showRetry: false };
-let currentUrlIndex = 0; // Track which URL we're trying for the station
-
-const LANGUAGE_NORMALIZATION = {
-    'arabic': 'Arabic', 'arabe': 'Arabic', 'العربية': 'Arabic', 'modern standard arabic': 'Arabic',
-    'egyptian arabic': 'Arabic', 'levantine arabic': 'Arabic', 'maghrebi arabic': 'Arabic',
-    'bengali': 'Bengali', 'bangla': 'Bengali', 'বাংলা': 'Bengali', 'bangla,bengali': 'Bengali',
-    'bengali,hindi': 'Bengali', 'bengali,english,hindi': 'Bengali', 'chinese': 'Chinese',
-    'mandarin': 'Chinese', '中文': 'Chinese', 'zhongwen': 'Chinese', 'putonghua': 'Chinese',
-    'cantonese': 'Chinese', 'yue': 'Chinese', 'english': 'English', 'british english': 'English',
-    'american english': 'English', 'australian english': 'English', 'canadian english': 'English', 'englsih': 'English',
-    'english,spanish': 'English', 'english,hindi': 'Hindi', 'english,hindi,marathi': 'Hindi',
-    'english,hindi,punjabi': 'Hindi', 'english hindi': 'Hindi', 'english,hindi,urdu': 'Hindi',
-    'english,english hindi,hindi': 'Hindi', 'english,malayalam,tamil': 'Malayalam',
-    'english,kannada,malayalam,tamil,telugu,urdu': 'Kannada', 'english,online radio,tamil': 'Tamil',
-    'french': 'French', 'français': 'French', 'francais': 'French', 'quebec french': 'French',
-    'canadian french': 'French', 'german': 'German', 'deutsch': 'German', 'high german': 'German',
-    'swiss german': 'German', 'austrian german': 'German', 'hindi': 'Hindi', 'हिन्दी': 'Hindi',
-    'hindustani': 'Hindi', 'hindi,english': 'Hindi', 'hindi,english assamese': 'Hindi',
-    'hindi,indian': 'Hindi', 'hindi,kashmiri,urdu': 'Hindi', 'hindi,marathi': 'Hindi',
-    'hindi,marathi,sanskrit': 'Hindi', 'hindi,punjabi': 'Hindi', 'hindi,telugu': 'Hindi',
-    'hindi,english,hindi': 'Hindi', 'haryanvi': 'Hindi', 'haryanvi,hindi,punjabi': 'Hindi',
-    'chhattisgarhi,hindi': 'Hindi', 'bhojpuri': 'Hindi', 'classical,evergreens,hindi': 'Hindi',
-    'italian': 'Italian', 'italiano': 'Italian', 'japanese': 'Japanese', '日本語': 'Japanese',
-    'nihongo': 'Japanese', 'korean': 'Korean', '한국어': 'Korean', 'hanguk-eo': 'Korean',
-    '조선말': 'Korean', 'joseongeul': 'Korean', 'portuguese': 'Portuguese', 'português': 'Portuguese',
-    'portugues': 'Portuguese', 'brazilian portuguese': 'Portuguese', 'european portuguese': 'Portuguese',
-    'russian': 'Russian', 'русский': 'Russian', 'russkiy': 'Russian', 'spanish': 'Spanish',
-    'español': 'Spanish', 'castilian': 'Spanish', 'castellano': 'Spanish', 'latin american spanish': 'Spanish',
-    'tamil': 'Tamil', 'தமிழ்': 'Tamil', 'telugu': 'Telugu', 'తెలుగు': 'Telugu', 'urdu': 'Urdu',
-    'اردو': 'Urdu', 'swahili': 'Swahili', 'kiswahili': 'Swahili', 'dutch': 'Dutch', 'nederlands': 'Dutch',
-    'flemish': 'Dutch', 'afrikaans': 'Afrikaans', 'turkish': 'Turkish', 'türkçe': 'Turkish',
-    'turkce': 'Turkish', 'polish': 'Polish', 'polski': 'Polish', 'vietnamese': 'Vietnamese',
-    'tiếng việt': 'Vietnamese', 'tieng viet': 'Vietnamese', 'thai': 'Thai', 'ไทย': 'Thai',
-    'phasa thai': 'Thai', 'greek': 'Greek', 'ελληνικά': 'Greek', 'ellinika': 'Greek', 'hebrew': 'Hebrew',
-    'עברית': 'Hebrew', 'ivrit': 'Hebrew', 'persian': 'Persian', 'farsi': 'Persian', 'پارسی': 'Persian',
-    'dari': 'Persian', 'malay': 'Malay', 'bahasa melayu': 'Malay', 'bahasa malaysia': 'Malay',
-    'indonesian': 'Indonesian', 'bahasa indonesia': 'Indonesian', 'filipino': 'Filipino',
-    'tagalog': 'Filipino', 'pilipino': 'Filipino', 'ukrainian': 'Ukrainian', 'українська': 'Ukrainian',
-    'ukrayinska': 'Ukrainian', 'czech': 'Czech', 'čeština': 'Czech', 'cestina': 'Czech',
-    'swedish': 'Swedish', 'svenska': 'Swedish', 'norwegian': 'Norwegian', 'norsk': 'Norwegian',
-    'bokmål': 'Norwegian', 'nynorsk': 'Norwegian', 'danish': 'Danish', 'dansk': 'Danish',
-    'finnish': 'Finnish', 'suomi': 'Finnish', 'hungarian': 'Hungarian', 'magyar': 'Hungarian',
-    'romanian': 'Romanian', 'română': 'Romanian', 'romana': 'Romanian', 'bulgarian': 'Bulgarian',
-    'български': 'Bulgarian', 'balgarski': 'Bulgarian', 'serbian': 'Serbian', 'српски': 'Serbian',
-    'srpski': 'Serbian', 'croatian': 'Croatian', 'hrvatski': 'Croatian', 'slovak': 'Slovak',
-    'slovenčina': 'Slovak', 'slovencina': 'Slovak', 'slovenian': 'Slovenian', 'slovenščina': 'Slovenian',
-    'slovenscina': 'Slovenian', 'assamese': 'Assamese', 'gujarati': 'Gujarati', 'gujrati': 'Gujarati', 'gujarati,hindi': 'Gujarati',
-    'kannada': 'Kannada', 'malayalam': 'Malayalam', 'malayalam,ml': 'Malayalam', 'malayalam,tamil': 'Malayalam',
-    'marathi': 'Marathi', 'nepali': 'Nepali', 'odia': 'Odia', 'punjabi': 'Punjabi', 'sanskrit': 'Sanskrit',
-    'estonian': 'Estonian', 'dan': 'Danish', 'englishish': 'English', 'konkani': 'Konkani', 'magesh': 'Marathi', 'bihari': 'Hindi', 'chhattisgarhi': 'Hindi', 'indian': 'Hindi'
-};
-
-const STATIC_COUNTRIES = [
-    { code: 'AF', name: 'Afghanistan' }, { code: 'AL', name: 'Albania' }, { code: 'DZ', name: 'Algeria' },
-    { code: 'AD', name: 'Andorra' }, { code: 'AO', name: 'Angola' }, { code: 'AG', name: 'Antigua and Barbuda' },
-    { code: 'AR', name: 'Argentina' }, { code: 'AM', name: 'Armenia' }, { code: 'AU', name: 'Australia' },
-    { code: 'AT', name: 'Austria' }, { code: 'AZ', name: 'Azerbaijan' }, { code: 'BS', name: 'Bahamas' },
-    { code: 'BH', name: 'Bahrain' }, { code: 'BD', name: 'Bangladesh' }, { code: 'BB', name: 'Barbados' },
-    { code: 'BY', name: 'Belarus' }, { code: 'BE', name: 'Belgium' }, { code: 'BZ', name: 'Belize' },
-    { code: 'BJ', name: 'Benin' }, { code: 'BT', name: 'Bhutan' }, { code: 'BO', name: 'Bolivia' },
-    { code: 'BA', name: 'Bosnia and Herzegovina' }, { code: 'BW', name: 'Botswana' }, { code: 'BR', name: 'Brazil' },
-    { code: 'BN', name: 'Brunei' }, { code: 'BG', name: 'Bulgaria' }, { code: 'BF', name: 'Burkina Faso' },
-    { code: 'BI', name: 'Burundi' }, { code: 'KH', name: 'Cambodia' }, { code: 'CM', name: 'Cameroon' },
-    { code: 'CA', name: 'Canada' }, { code: 'CV', name: 'Cape Verde' }, { code: 'CF', name: 'Central African Republic' },
-    { code: 'TD', name: 'Chad' }, { code: 'CL', name: 'Chile' }, { code: 'CN', name: 'China' },
-    { code: 'CO', name: 'Colombia' }, { code: 'KM', name: 'Comoros' }, { code: 'CG', name: 'Congo' },
-    { code: 'CD', name: 'Congo (DRC)' }, { code: 'CR', name: 'Costa Rica' }, { code: 'CI', name: "Côte d'Ivoire" },
-    { code: 'HR', name: 'Croatia' }, { code: 'CU', name: 'Cuba' }, { code: 'CY', name: 'Cyprus' },
-    { code: 'CZ', name: 'Czech Republic' }, { code: 'DK', name: 'Denmark' }, { code: 'DJ', name: 'Djibouti' },
-    { code: 'DM', name: 'Dominica' }, { code: 'DO', name: 'Dominican Republic' }, { code: 'EC', name: 'Ecuador' },
-    { code: 'EG', name: 'Egypt' }, { code: 'SV', name: 'El Salvador' }, { code: 'GQ', name: 'Equatorial Guinea' },
-    { code: 'ER', name: 'Eritrea' }, { code: 'EE', name: 'Estonia' }, { code: 'ET', name: 'Ethiopia' },
-    { code: 'FJ', name: 'Fiji' }, { code: 'FI', name: 'Finland' }, { code: 'FR', name: 'France' },
-    { code: 'GA', name: 'Gabon' }, { code: 'GM', name: 'Gambia' }, { code: 'GE', name: 'Georgia' },
-    { code: 'DE', name: 'Germany' }, { code: 'GH', name: 'Ghana' }, { code: 'GR', name: 'Greece' },
-    { code: 'GD', name: 'Grenada' }, { code: 'GT', name: 'Guatemala' }, { code: 'GN', name: 'Guinea' },
-    { code: 'GW', name: 'Guinea-Bissau' }, { code: 'GY', name: 'Guyana' }, { code: 'HT', name: 'Haiti' },
-    { code: 'HN', name: 'Honduras' }, { code: 'HU', name: 'Hungary' }, { code: 'IS', name: 'Iceland' },
-    { code: 'IN', name: 'India' }, { code: 'ID', name: 'Indonesia' }, { code: 'IR', name: 'Iran' },
-    { code: 'IQ', name: 'Iraq' }, { code: 'IE', name: 'Ireland' }, { code: 'IL', name: 'Israel' },
-    { code: 'IT', name: 'Italy' }, { code: 'JM', name: 'Jamaica' }, { code: 'JP', name: 'Japan' },
-    { code: 'JO', name: 'Jordan' }, { code: 'KZ', name: 'Kazakhstan' }, { code: 'KE', name: 'Kenya' },
-    { code: 'KI', name: 'Kiribati' }, { code: 'KP', name: 'North Korea' }, { code: 'KR', name: 'South Korea' },
-    { code: 'KW', name: 'Kuwait' }, { code: 'KG', name: 'Kyrgyzstan' }, { code: 'LA', name: 'Laos' },
-    { code: 'LV', name: 'Latvia' }, { code: 'LB', name: 'Lebanon' }, { code: 'LS', name: 'Lesotho' },
-    { code: 'LR', name: 'Liberia' }, { code: 'LY', name: 'Libya' }, { code: 'LI', name: 'Liechtenstein' },
-    { code: 'LT', name: 'Lithuania' }, { code: 'LU', name: 'Luxembourg' }, { code: 'MG', name: 'Madagascar' },
-    { code: 'MW', name: 'Malawi' }, { code: 'MY', name: 'Malaysia' }, { code: 'MV', name: 'Maldives' },
-    { code: 'ML', name: 'Mali' }, { code: 'MT', name: 'Malta' }, { code: 'MH', name: 'Marshall Islands' },
-    { code: 'MR', name: 'Mauritania' }, { code: 'MU', name: 'Mauritius' }, { code: 'MX', name: 'Mexico' },
-    { code: 'FM', name: 'Micronesia' }, { code: 'MD', name: 'Moldova' }, { code: 'MC', name: 'Monaco' },
-    { code: 'MN', name: 'Mongolia' }, { code: 'ME', name: 'Montenegro' }, { code: 'MA', name: 'Morocco' },
-    { code: 'MZ', name: 'Mozambique' }, { code: 'MM', name: 'Myanmar' }, { code: 'NA', name: 'Namibia' },
-    { code: 'NR', name: 'Nauru' }, { code: 'NP', name: 'Nepal' }, { code: 'NL', name: 'Netherlands' },
-    { code: 'NZ', name: 'New Zealand' }, { code: 'NI', name: 'Nicaragua' }, { code: 'NE', name: 'Niger' },
-    { code: 'NG', name: 'Nigeria' }, { code: 'NO', name: 'Norway' }, { code: 'OM', name: 'Oman' },
-    { code: 'PK', name: 'Pakistan' }, { code: 'PW', name: 'Palau' }, { code: 'PA', name: 'Panama' },
-    { code: 'PG', name: 'Papua New Guinea' }, { code: 'PY', name: 'Paraguay' }, { code: 'PE', name: 'Peru' },
-    { code: 'PH', name: 'Philippines' }, { code: 'PL', name: 'Poland' }, { code: 'PT', name: 'Portugal' },
-    { code: 'QA', name: 'Qatar' }, { code: 'RO', name: 'Romania' }, { code: 'RU', name: 'Russia' },
-    { code: 'RW', name: 'Rwanda' }, { code: 'KN', name: 'Saint Kitts and Nevis' }, { code: 'LC', name: 'Saint Lucia' },
-    { code: 'VC', name: 'Saint Vincent and the Grenadines' }, { code: 'WS', name: 'Samoa' },
-    { code: 'SM', name: 'San Marino' }, { code: 'ST', name: 'São Tomé and Príncipe' }, { code: 'SA', name: 'Saudi Arabia' },
-    { code: 'SN', name: 'Senegal' }, { code: 'RS', name: 'Serbia' }, { code: 'SC', name: 'Seychelles' },
-    { code: 'SL', name: 'Sierra Leone' }, { code: 'SG', name: 'Singapore' }, { code: 'SK', name: 'Slovakia' },
-    { code: 'SI', name: 'Slovenia' }, { code: 'SB', name: 'Solomon Islands' }, { code: 'SO', name: 'Somalia' },
-    { code: 'ZA', name: 'South Africa' }, { code: 'SS', name: 'South Sudan' }, { code: 'ES', name: 'Spain' },
-    { code: 'LK', name: 'Sri Lanka' }, { code: 'SD', name: 'Sudan' }, { code: 'SR', name: 'Suriname' },
-    { code: 'SE', name: 'Sweden' }, { code: 'CH', name: 'Switzerland' }, { code: 'SY', name: 'Syria' },
-    { code: 'TJ', name: 'Tajikistan' }, { code: 'TZ', name: 'Tanzania' }, { code: 'TH', name: 'Thailand' },
-    { code: 'TL', name: 'Timor-Leste' }, { code: 'TG', name: 'Togo' }, { code: 'TO', name: 'Tonga' },
-    { code: 'TT', name: 'Trinidad and Tobago' }, { code: 'TN', name: 'Tunisia' }, { code: 'TR', name: 'Turkey' },
-    { code: 'TM', name: 'Turkmenistan' }, { code: 'TV', name: 'Tuvalu' }, { code: 'UG', name: 'Uganda' },
-    { code: 'UA', name: 'Ukraine' }, { code: 'AE', name: 'United Arab Emirates' }, { code: 'GB', name: 'United Kingdom' },
-    { code: 'US', name: 'United States' }, { code: 'UY', name: 'Uruguay' }, { code: 'UZ', name: 'Uzbekistan' },
-    { code: 'VU', name: 'Vanuatu' }, { code: 'VE', name: 'Venezuela' }, { code: 'VN', name: 'Vietnam' },
-    { code: 'YE', name: 'Yemen' }, { code: 'ZM', name: 'Zambia' }, { code: 'ZW', name: 'Zimbabwe' }
-];
+let lastError = { message: null };
+let selectedLanguage = '';
+let isStopping = false;
+let audioErrorRetryCount = 0;
+let isManuallyPaused = false;
+let stationsFailedToLoad = false;
+let lastSelectedCountry = null;
+let errorDebounceTimeout = null;
+let isOffline = !navigator.onLine;
+let userInteracted = false;
 
 audio.autoplay = false;
 audio.preload = 'auto';
 audio.setAttribute('playsinline', '');
 
+document.addEventListener('click', () => {
+    userInteracted = true;
+    console.log('User interaction detected, enabling autoplay.');
+}, { once: true });
+
 function getAudioErrorMessage(error) {
-    if (!error) return 'Unknown playback error.';
-    const audioError = error.target.error;
-    if (!audioError) return 'Playback failed for an unknown reason.';
+    if (!error) return "Oops! Something went wrong with the music.";
+    const audioError = error.target?.error;
+    if (!audioError) return "The music stopped for an unexpected reason.";
     switch (audioError.code) {
-        case MediaError.MEDIA_ERR_ABORTED:
-            return 'Playback was aborted.';
-        case MediaError.MEDIA_ERR_NETWORK:
-            return 'Network error: Could not load the stream.\nCheck your connection.';
-        case MediaError.MEDIA_ERR_DECODE:
-            return 'Stream decoding error: Format may be unsupported.';
-        case MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED:
-            return 'Stream not supported: Invalid or unavailable source.';
-        default:
-            return `Playback error (Code ${audioError.code}): ${audioError.message || 'Unknown issue.'}`;
+        case MediaError.MEDIA_ERR_ABORTED: return "The music was interrupted.";
+        case MediaError.MEDIA_ERR_NETWORK: return "Looks like your internet dropped.";
+        case MediaError.MEDIA_ERR_DECODE: return "This station’s sound isn’t working right now.";
+        case MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED: return "This station isn’t available at the moment.";
+        default: return "Something’s up with the music.";
     }
 }
 
 audio.addEventListener('suspend', () => {
-    console.log('Audio suspended, attempting to resume...');
-    if (isPlaying && currentStation) {
+    console.warn('Audio suspended, attempting to resume...', { isPlaying, isOffline, isManuallyPaused });
+    if (isPlaying && currentStation && !isOffline && !isManuallyPaused) {
         audio.play().catch(err => {
             console.error('Failed to resume audio on suspend:', err);
-            showError(`Couldn't resume playback.\nTry pressing play or selecting a new station.\n${err.message}`, true);
+            showError("The music paused unexpectedly.\nPlease press play or pick a new station.");
         });
     }
 });
@@ -181,16 +79,14 @@ audio.addEventListener('suspend', () => {
 audio.addEventListener('playing', () => {
     isPlaying = true;
     hasError = false;
-    reconnectAttempts = 0;
-    currentUrlIndex = 0; // Reset URL index when playback starts
-    isRetrying = false;
-    updatePlayerDisplay();
+    audioErrorRetryCount = 0;
+    isManuallyPaused = false;
     clearError();
+    updatePlayerDisplay();
     showLoading(false);
     startHeartbeat();
     updateMediaSession();
-    if (currentStation) showRadioNotification(currentStation);
-    console.log('Audio is playing');
+    console.log('Audio started playing', { station: currentStation?.name });
 });
 
 audio.addEventListener('pause', () => {
@@ -198,178 +94,112 @@ audio.addEventListener('pause', () => {
     stopHeartbeat();
     updatePlayerDisplay();
     updateMediaSession();
-    if (currentStation) showRadioNotification(currentStation);
-    console.log('Audio paused');
+    console.log('Audio paused', { manual: isManuallyPaused });
 });
 
 audio.addEventListener('error', (e) => {
+    if (isStopping) return;
     hasError = true;
-    console.error('Audio error:', e);
+    console.error('Audio error occurred:', e, { code: e.target?.error?.code, message: e.target?.error?.message });
     stopHeartbeat();
+    isPlaying = false;
+    if (isOffline) {
+        showError('You are offline!\nPlease check your internet connection.');
+        return;
+    }
     const errorMessage = getAudioErrorMessage(e);
-    if (currentStation && isPlaying) {
-        showError(`${errorMessage}\nAttempting to reconnect to ${currentStation.name}...`, false);
-        attemptReconnect();
-    } else if (!isPlaying) {
-        showError(`${errorMessage}\nSelect a station to play.`, false);
-        showLoading(false);
-    }
-});
-
-audio.addEventListener('canplay', () => {
-    console.log('Audio can play');
-});
-
-audio.addEventListener('stalled', () => {
-    console.log('Audio stalled');
-    hasError = true;
-    stopHeartbeat();
-    if (currentStation && isPlaying) {
-        showError(`Stream stalled for ${currentStation.name}.\nAttempting to reconnect...`, false);
-        attemptReconnect();
+    if (currentStation && audioErrorRetryCount < MAX_AUDIO_ERROR_RETRIES) {
+        audioErrorRetryCount++;
+        console.warn(`Retrying ${currentStation.name} due to error (attempt ${audioErrorRetryCount}/${MAX_AUDIO_ERROR_RETRIES})`);
+        showError(`${errorMessage} Retrying ${currentStation.name}... (attempt ${audioErrorRetryCount})`);
+        setTimeout(() => playStation(currentStation), AUDIO_ERROR_RETRY_DELAY);
+    } else if (currentStation) {
+        console.error(`${currentStation.name} failed after ${MAX_AUDIO_ERROR_RETRIES} retries`);
+        showError(`${errorMessage}\n${currentStation.name} failed after ${MAX_AUDIO_ERROR_RETRIES} attempts. Trying fallback station...`);
+        audioErrorRetryCount = 0;
+        playStation(FALLBACK_STATION); // Try fallback station
     } else {
-        showError(`Stream stalled.\nSelect a station to play.`, false);
+        showError(`${errorMessage}\nChoose a station to start the music.`);
+        updatePlayerDisplay();
         showLoading(false);
     }
 });
 
-audio.addEventListener('ended', () => {
-    console.log('Audio stream ended');
-    hasError = true;
-    stopHeartbeat();
-    if (currentStation && isPlaying) {
-        showError(`Stream ended for ${currentStation.name}.\nAttempting to reconnect...`, false);
-        attemptReconnect();
-    }
-});
+audio.addEventListener('canplay', () => console.log('Audio can play', { src: audio.src }));
 
 document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'hidden' && isPlaying && currentStation) {
+    if (document.visibilityState === 'hidden' && isPlaying && currentStation && !isOffline && !isManuallyPaused) {
         console.log('App minimized or screen off, ensuring audio continues...');
         audio.play().catch(err => {
             console.error('Failed to keep audio playing in background:', err);
-            showError(`Background playback stopped.\nTry resuming manually.\n${err.message}`, true);
+            showError("The music stopped when you left the app.\nPlease tap play to bring it back!");
         });
     }
 });
 
-async function requestNotificationPermission() {
-    if (!("Notification" in window)) {
-        console.log("This browser does not support notifications.");
-        return false;
-    }
-
-    if (Notification.permission === "granted") {
-        return true;
-    }
-
-    const permission = await Notification.requestPermission();
-    return permission === "granted";
-}
-
-async function showRadioNotification(station) {
-    if (!("Notification" in window) || Notification.permission !== "granted") {
-        return;
-    }
-
-    const registration = await navigator.serviceWorker.ready;
-    const options = {
-        body: `Now Playing: ${station.name}${station.language ? ` (${normalizeLanguage(station.language)})` : ''}`,
-        icon: 'https://via.placeholder.com/96x96',
-        badge: 'https://via.placeholder.com/96x96',
-        actions: [
-            { action: 'previous', title: 'Previous', icon: 'https://via.placeholder.com/64x64' },
-            { action: isPlaying ? 'pause' : 'play', title: isPlaying ? 'Pause' : 'Play', icon: 'https://via.placeholder.com/64x64' },
-            { action: 'next', title: 'Next', icon: 'https://via.placeholder.com/64x64' }
-        ],
-        tag: 'radio-notification',
-        renotify: true,
-        silent: false,
-        vibrate: [200, 100, 200]
-    };
-
-    registration.showNotification(NOTIFICATION_TITLE, options);
-}
-
-function closeNotification() {
-    if ('serviceWorker' in navigator) {
-        navigator.serviceWorker.ready.then(registration => {
-            registration.getNotifications({ tag: 'radio-notification' }).then(notifications => {
-                notifications.forEach(notification => notification.close());
-            });
-        });
-    }
-}
-
 function updateMediaSession() {
     if ('mediaSession' in navigator) {
+        console.log('Updating media session', { station: currentStation?.name, isPlaying });
         navigator.mediaSession.metadata = new MediaMetadata({
             title: currentStation ? currentStation.name : 'World FM Radio',
             artist: 'World FM Radio',
             album: 'Live Stream',
             artwork: [
                 { src: 'https://via.placeholder.com/96x96', sizes: '96x96', type: 'image/png' },
-                { src: 'https://via.placeholder.com/128x128', sizes: '128x128', type: 'image/png' },
+                { src: 'https://via.placeholder.com/128x128', sizes: '128x128', type: 'image/png' }
             ]
         });
-
         navigator.mediaSession.setActionHandler('play', async () => {
-            if (currentStation) {
+            if (currentStation && !isOffline) {
+                console.log('Media session play triggered');
                 audio.play().then(() => {
                     isPlaying = true;
+                    isManuallyPaused = false;
                     updatePlayerDisplay();
                     startHeartbeat();
-                    showRadioNotification(currentStation);
                 }).catch(err => {
-                    console.error('Media Session play failed:', err);
-                    showError(`Can't start playback.\nTry again or pick a different station.\n${err.message}`, true);
+                    console.error('Media session play failed:', err);
+                    showError("We couldn’t start the music.\the music.\nPlease try again or pick a new station!");
                 });
             }
         });
-
         navigator.mediaSession.setActionHandler('pause', () => {
+            console.log('Media session pause triggered');
             audio.pause();
             isPlaying = false;
+            isManuallyPaused = true;
             stopHeartbeat();
             updatePlayerDisplay();
-            showRadioNotification(currentStation);
         });
-
-        navigator.mediaSession.setActionHandler('stop', () => {
-            stopPlayback();
-            showError('Playback stopped.', false);
-            closeNotification();
-        });
-
-        navigator.mediaSession.setActionHandler('previoustrack', () => {
-            previousStation();
-        });
-
-        navigator.mediaSession.setActionHandler('nexttrack', () => {
-            nextStation();
-        });
-
+        navigator.mediaSession.setActionHandler('stop', stopPlayback);
+        navigator.mediaSession.setActionHandler('previoustrack', previousStation);
+        navigator.mediaSession.setActionHandler('nexttrack', nextStation);
         navigator.mediaSession.playbackState = isPlaying ? 'playing' : 'paused';
     }
 }
 
 async function fetchFromFastestServer(endpoint, retryCount = 0) {
+    if (isOffline) throw new Error('Offline: Cannot fetch stations.');
+    console.log(`Fetching from servers: ${endpoint}, retry ${retryCount + 1}/${MAX_RETRIES}`);
     const fetchPromises = API_SERVERS.map(server =>
         fetch(`${server}${endpoint}`).then(res => {
             if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
+            console.log(`Server ${server} responded successfully`);
             return res.json();
         }).catch(err => {
-            console.error(`Server ${server} failed:`, err);
+            console.warn(`Server ${server} failed:`, err.message);
             return null;
         })
     );
     try {
         const results = await Promise.race(fetchPromises.filter(p => p));
         if (!results) throw new Error('All servers failed');
+        console.log('Fetched stations:', results.slice(0, 5)); // Log first 5 for inspection
         return results;
     } catch (error) {
-        if (retryCount < MAX_RETRIES) {
-            console.log('Retrying fetch, attempt:', retryCount + 1);
+        console.error('Fetch attempt failed:', error.message);
+        if (retryCount < MAX_RETRIES - 1) {
+            console.log('Retrying fetch...');
             return fetchFromFastestServer(endpoint, retryCount + 1);
         }
         throw error;
@@ -377,156 +207,110 @@ async function fetchFromFastestServer(endpoint, retryCount = 0) {
 }
 
 async function getUserCountryCode() {
+    if (isOffline) {
+        console.warn('Offline, defaulting to country code "IN"');
+        return 'IN';
+    }
+    console.log('Detecting user country code...');
     try {
         const response = await fetch('https://ipapi.co/json/');
         if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
         const data = await response.json();
-        console.log('User country detected:', data.country_code);
+        console.log('Country code detected:', data.country_code || 'IN');
         return data.country_code || 'IN';
     } catch (error) {
-        console.error('Failed to detect user country:', error);
+        console.error('Failed to detect country code:', error.message);
         return 'IN';
     }
 }
 
-async function initializeApp() {
-    console.log('Starting app initialization...');
-    showLoading(true);
-
-    const populateCountriesWithRetry = async (retries = 3, delay = 100) => {
-        let attempts = 0;
-        while (attempts < retries) {
-            const countrySelect = document.getElementById('countrySelect');
-            if (countrySelect) {
-                console.log('Populating country dropdown...');
-                populateCountryDropdown(STATIC_COUNTRIES);
-                console.log('Country dropdown populated with', STATIC_COUNTRIES.length, 'countries');
-                return countrySelect;
-            }
-            console.warn(`Country select not found, retrying (${attempts + 1}/${retries})...`);
-            attempts++;
-            await new Promise(resolve => setTimeout(resolve, delay));
+async function initializeApp(retryCount = 0) {
+    console.log('Initializing app...', { retryCount });
+    const requiredElements = ['countrySelect', 'volumeLevel', 'errorContainer', 'loading'];
+    if (!requiredElements.every(id => document.getElementById(id))) {
+        console.error('Required DOM elements missing:', requiredElements.filter(id => !document.getElementById(id)));
+        if (retryCount < 3) {
+            console.log(`Retrying initialization in ${INIT_RETRY_DELAY}ms...`);
+            setTimeout(() => initializeApp(retryCount + 1), INIT_RETRY_DELAY);
+            return;
         }
-        throw new Error('Country select element not found after retries');
-    };
+        showError('The app couldn’t load properly.\nPlease refresh the page.');
+        return;
+    }
 
+    showLoading(true);
     try {
-        const countrySelect = await populateCountriesWithRetry();
+        const countrySelect = document.getElementById('countrySelect');
+        console.log('Populating country dropdown...');
+        populateCountryDropdown(STATIC_COUNTRIES);
         const userCountryCode = await getUserCountryCode();
         const validCountry = STATIC_COUNTRIES.some(c => c.code === userCountryCode);
         const selectedCountry = validCountry ? userCountryCode : 'IN';
         countrySelect.value = selectedCountry;
+        lastSelectedCountry = selectedCountry;
         console.log('Selected country:', selectedCountry);
-
         updateFlagDisplay(selectedCountry);
         await fetchAndDisplayAllStations(selectedCountry);
-        await requestNotificationPermission();
-        showError('');
+        stationsFailedToLoad = false;
+        document.getElementById('volumeLevel').textContent = `${Math.round(audio.volume * 100)}%`;
+        clearError();
+        console.log('App initialized successfully');
     } catch (error) {
-        console.error('Initialization error:', error);
-        showError(`Failed to initialize app.\nCountries may not have loaded.\nCheck your connection and press retry.\n${error.message}`, true);
-        const countrySelect = document.getElementById('countrySelect');
-        if (!countrySelect || !countrySelect.children.length) {
-            populateCountryDropdown(STATIC_COUNTRIES);
-        }
+        console.error('Initialization failed:', error.message);
+        stationsFailedToLoad = true;
+        showError(isOffline ? 'You are offline!\nPlease check your internet connection.' : 'Failed to initialize app.\nPlease check your connection and refresh!');
     } finally {
         showLoading(false);
-        console.log('App initialization complete');
     }
 }
 
 function mergeDuplicateStations(stations) {
     const seen = new Map();
     const deduplicated = [];
-
     for (const station of stations) {
         const normalizedLanguage = normalizeLanguage(station.language);
         const key = `${station.name.toLowerCase()}|${normalizedLanguage || 'unknown'}`;
-
         if (!seen.has(key)) {
             seen.set(key, station);
             deduplicated.push(station);
-        } else {
-            console.log(`Duplicate station found and merged: ${station.name} (${normalizedLanguage})`);
         }
     }
-
-    console.log(`Reduced stations from ${stations.length} to ${deduplicated.length} after merging duplicates`);
+    console.log(`Merged duplicates: ${stations.length} -> ${deduplicated.length} stations`);
     return deduplicated;
 }
 
 async function fetchAndDisplayAllStations(countryCode) {
+    console.log('Fetching stations for country:', countryCode);
     showLoading(true);
     try {
         const cacheKey = `${CACHE_KEY}_${countryCode}`;
         const cachedData = localStorage.getItem(cacheKey);
         let allStations = null;
-
         if (cachedData) {
             const { data, timestamp } = JSON.parse(cachedData);
-            const now = Date.now();
-            if (now - timestamp < CACHE_DURATION) {
-                console.log('Using cached stations for country:', countryCode);
+            if (Date.now() - timestamp < CACHE_DURATION) {
+                console.log('Using cached stations for:', countryCode);
                 allStations = data;
-            } else {
-                console.log('Cache expired for country:', countryCode);
-                localStorage.removeItem(cacheKey);
             }
         }
-
         if (!allStations) {
-            console.log('Fetching stations for country code:', countryCode);
+            console.log('Fetching fresh stations from API...');
             allStations = await fetchFromFastestServer(`/json/stations/bycountrycodeexact/${countryCode}?hidebroken=true&order=votes&reverse=true`);
             if (!allStations || !allStations.length) throw new Error(`No stations found for ${countryCode}`);
-            localStorage.setItem(cacheKey, JSON.stringify({
-                data: allStations,
-                timestamp: Date.now()
-            }));
-            console.log('Stations cached for country:', countryCode);
+            localStorage.setItem(cacheKey, JSON.stringify({ data: allStations, timestamp: Date.now() }));
+            console.log('Stations cached successfully');
         }
-
         countryStations = mergeDuplicateStations(allStations);
         stations = [...countryStations];
-        console.log('All stations after deduplication:', countryStations.length);
-
-        const stationSelect = document.getElementById('stationSelect');
-        stationSelect.innerHTML = '<option value="">Select Station</option>';
-        let index = 0;
-
-        const renderBatch = () => {
-            const fragment = document.createDocumentFragment();
-            const end = Math.min(index + BATCH_SIZE, stations.length);
-            for (; index < end; index++) {
-                const station = stations[index];
-                const option = document.createElement('option');
-                option.value = index;
-                option.textContent = `${station.name} ${station.bitrate ? `(${station.bitrate}kbps)` : ''}`;
-                if (station.votes > 100) {
-                    option.classList.add('high-votes');
-                } else if (station.votes < 10) {
-                    option.classList.add('low-votes');
-                } else {
-                    option.classList.add('medium-votes');
-                }
-                fragment.appendChild(option);
-            }
-            stationSelect.appendChild(fragment);
-
-            if (index < stations.length) {
-                requestAnimationFrame(renderBatch);
-            } else {
-                stationSelect.disabled = false;
-                console.log('All stations rendered:', stations.length);
-                populateLanguageDropdown();
-                showLoading(false);
-            }
-        };
-
-        requestAnimationFrame(renderBatch);
+        console.log('Rendering station list...', { stationCount: stations.length });
+        renderStationList();
     } catch (error) {
-        console.error('Error fetching stations:', error);
-        showError(`No stations loaded for ${countryCode}.\nTry another country.\n${error.message}`, false);
-        document.getElementById('stationSelect').disabled = true;
+        console.error('Failed to fetch/display stations:', error.message);
+        stationsFailedToLoad = true;
+        showError('No stations loaded. Trying fallback station...');
+        stations = [FALLBACK_STATION]; // Fallback to test station
+        renderStationList();
+    } finally {
         showLoading(false);
     }
 }
@@ -534,8 +318,7 @@ async function fetchAndDisplayAllStations(countryCode) {
 function populateCountryDropdown(countries) {
     const countrySelect = document.getElementById('countrySelect');
     if (!countrySelect) {
-        console.error('Country select element not found in DOM');
-        showError(`App error: Country list not found.\nPlease refresh the page.`, true);
+        console.error('Country select element not found');
         return;
     }
     countrySelect.innerHTML = '<option value="">Select Country</option>';
@@ -549,26 +332,32 @@ function populateCountryDropdown(countries) {
     });
     countrySelect.appendChild(fragment);
     countrySelect.disabled = false;
-    console.log('Country dropdown populated with', countries.length, 'countries');
+    countrySelect.removeEventListener('change', handleCountryChange);
+    countrySelect.addEventListener('change', handleCountryChange);
+    console.log('Country dropdown populated with', countries.length, 'options');
+}
 
-    if (!countrySelect.dataset.listenerAdded) {
-        countrySelect.addEventListener('change', async (e) => {
-            const countryCode = e.target.value;
-            updateFlagDisplay(countryCode);
-            if (countryCode) {
-                clearError();
-                await fetchAndDisplayAllStations(countryCode);
-                document.getElementById('languageSelect').disabled = false;
-                document.getElementById('stationSelect').disabled = false;
-            } else {
-                clearError();
-                document.getElementById('languageSelect').innerHTML = '<option value="">Select country first</option>';
-                document.getElementById('languageSelect').disabled = true;
-                document.getElementById('stationSelect').innerHTML = '<option value="">Select language first</option>';
-                document.getElementById('stationSelect').disabled = true;
-            }
+function handleCountryChange(e) {
+    const countryCode = e.target.value;
+    console.log('Country changed to:', countryCode);
+    updateFlagDisplay(countryCode);
+    if (countryCode) {
+        clearError();
+        selectedLanguage = '';
+        lastSelectedCountry = countryCode;
+        fetchAndDisplayAllStations(countryCode).catch((err) => {
+            console.error('Country change failed:', err.message);
+            stationsFailedToLoad = true;
+            showError(isOffline ? 'You are offline!\nPlease check your internet connection.' : 'Couldn’t load stations.\nTry another country!');
         });
-        countrySelect.dataset.listenerAdded = 'true';
+    } else {
+        clearError();
+        selectedLanguage = '';
+        document.getElementById('languageSelect').innerHTML = '<option value="">Select country first</option>';
+        document.getElementById('languageSelect').disabled = true;
+        document.getElementById('stationSelect').innerHTML = '<option value="">Select language first</option>';
+        document.getElementById('stationSelect').disabled = true;
+        console.log('Country reset, clearing language and station options');
     }
 }
 
@@ -576,8 +365,10 @@ function updateFlagDisplay(countryCode) {
     const countrySelect = document.getElementById('countrySelect');
     if (countryCode) {
         countrySelect.style.backgroundImage = `url('https://flagcdn.com/24x18/${countryCode.toLowerCase()}.png')`;
+        console.log('Flag updated for country:', countryCode);
     } else {
         countrySelect.style.backgroundImage = 'none';
+        console.log('Flag cleared');
     }
 }
 
@@ -585,35 +376,27 @@ function normalizeLanguage(rawLanguage) {
     if (!rawLanguage) return null;
     const cleanedLanguage = rawLanguage.toLowerCase().replace(/[^a-z\s,;-]/g, '').trim();
     if (!cleanedLanguage) return null;
-
     const languages = cleanedLanguage.split(/[,;-]/).map(lang => lang.trim());
     for (let lang of languages) {
-        if (lang && LANGUAGE_NORMALIZATION[lang]) {
-            return LANGUAGE_NORMALIZATION[lang];
-        }
+        if (lang && LANGUAGE_NORMALIZATION[lang]) return LANGUAGE_NORMALIZATION[lang];
     }
-
     const firstLang = languages[0];
     if (firstLang && /^[a-z]+$/.test(firstLang)) {
         return firstLang.charAt(0).toUpperCase() + firstLang.slice(1);
     }
-
     return null;
 }
 
 function populateLanguageDropdown() {
     const languageSelect = document.getElementById('languageSelect');
     const languageCounts = new Map();
-
-    stations.forEach(station => {
+    countryStations.forEach(station => {
         const normalizedLanguage = normalizeLanguage(station.language);
         if (normalizedLanguage) {
             languageCounts.set(normalizedLanguage, (languageCounts.get(normalizedLanguage) || 0) + 1);
         }
     });
-
     const sortedLanguages = Array.from(languageCounts.keys()).sort();
-
     languageSelect.innerHTML = '<option value="">All Languages</option>';
     sortedLanguages.forEach(lang => {
         const count = languageCounts.get(lang);
@@ -622,28 +405,30 @@ function populateLanguageDropdown() {
         option.textContent = `${lang} (${count} station${count !== 1 ? 's' : ''})`;
         languageSelect.appendChild(option);
     });
-
+    languageSelect.value = selectedLanguage || '';
     languageSelect.disabled = false;
-    languageSelect.addEventListener('change', (e) => {
-        const selectedLanguage = e.target.value;
-        filterStationsByLanguage(selectedLanguage);
-    });
+    languageSelect.removeEventListener('change', handleLanguageChange);
+    languageSelect.addEventListener('change', handleLanguageChange);
+    console.log('Language dropdown populated with', sortedLanguages.length, 'options');
+}
+
+function handleLanguageChange(e) {
+    selectedLanguage = e.target.value;
+    console.log('Language changed to:', selectedLanguage);
+    filterStationsByLanguage(selectedLanguage);
+    renderStationList();
 }
 
 function filterStationsByLanguage(language) {
-    if (!language) {
-        stations = [...countryStations];
-    } else {
-        stations = countryStations.filter(station => {
-            const normalizedLanguage = normalizeLanguage(station.language);
-            return normalizedLanguage === language;
-        });
-    }
+    stations = language ? countryStations.filter(station => normalizeLanguage(station.language) === language) : [...countryStations];
+    console.log('Filtered stations by language:', { language, count: stations.length });
+}
 
+function renderStationList() {
     const stationSelect = document.getElementById('stationSelect');
     stationSelect.innerHTML = '<option value="">Select Station</option>';
     let index = 0;
-
+    const start = performance.now();
     const renderBatch = () => {
         const fragment = document.createDocumentFragment();
         const end = Math.min(index + BATCH_SIZE, stations.length);
@@ -652,241 +437,157 @@ function filterStationsByLanguage(language) {
             const option = document.createElement('option');
             option.value = index;
             option.textContent = `${station.name} ${station.bitrate ? `(${station.bitrate}kbps)` : ''}`;
-            if (station.votes > 100) {
-                option.classList.add('high-votes');
-            } else if (station.votes < 10) {
-                option.classList.add('low-votes');
-            } else {
-                option.classList.add('medium-votes');
-            }
+            if (station.votes > 100) option.classList.add('high-votes');
+            else if (station.votes < 10) option.classList.add('low-votes');
+            else option.classList.add('medium-votes');
             fragment.appendChild(option);
         }
         stationSelect.appendChild(fragment);
-
-        if (index < stations.length) {
-            requestAnimationFrame(renderBatch);
-        } else {
+        if (index < stations.length) requestAnimationFrame(renderBatch);
+        else {
             stationSelect.disabled = false;
+            console.log(`Station list rendered: ${stations.length} stations in ${performance.now() - start}ms`);
+            showLoading(false);
+            populateLanguageDropdown();
         }
     };
-
+    console.log('Starting station list render...');
     requestAnimationFrame(renderBatch);
 }
 
 async function testStream(url) {
+    if (isOffline) {
+        console.warn('Offline, skipping stream test');
+        return false;
+    }
+    console.log('Testing stream:', url);
     try {
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), TEST_STREAM_TIMEOUT);
         const response = await fetch(url, { method: 'HEAD', signal: controller.signal });
         clearTimeout(timeoutId);
         const contentType = response.headers.get('Content-Type') || '';
-        // Check if the content type is audio-related
-        if (!contentType.includes('audio') && !contentType.includes('application/ogg') && !contentType.includes('application/x-mpegURL')) {
-            console.warn(`Stream URL ${url} has unsupported content type: ${contentType}`);
-            return false;
-        }
-        return response.ok;
+        const isValid = (contentType.includes('audio') || contentType.includes('application/ogg') || contentType.includes('application/x-mpegURL')) && response.ok;
+        console.log('Stream test result:', { url, isValid, contentType });
+        return isValid;
     } catch (error) {
-        console.error('Stream test failed for URL:', url, error);
+        console.error('Stream test failed:', error.message);
         return false;
     }
 }
 
 async function playStation(station) {
-    showLoading(true);
+    if (isOffline) {
+        showError('You are offline!\nPlease check your internet connection.');
+        return;
+    }
+    console.log('Attempting to play station:', { name: station.name, url: station.url });
     clearError();
+    showLoading(true);
     hasError = false;
-    reconnectAttempts = 0;
-    currentUrlIndex = 0; // Reset URL index for this station
-    isRetrying = false;
+    isManuallyPaused = false;
+    isPlaying = false;
+
+    audio.pause();
+    audio.src = '';
+    audio.load();
+    currentStation = station;
 
     try {
-        // Reset audio
-        audio.pause();
-        audio.src = '';
-        audio.currentTime = 0;
-
-        // Prepare all possible URLs for the station
-        const urlsToTry = [station.url_resolved || station.url];
-        if (station.url_alt && Array.isArray(station.url_alt)) {
-            urlsToTry.push(...station.url_alt.filter(url => url && url.startsWith('http')));
-        }
-
-        let workingUrl = null;
-        for (let i = currentUrlIndex; i < urlsToTry.length; i++) {
-            currentUrlIndex = i;
-            let url = urlsToTry[i];
-            console.log(`Trying URL ${i + 1}/${urlsToTry.length}:`, url);
-
-            // Handle playlist files (.m3u, .pls)
-            if (url.endsWith('.m3u') || url.endsWith('.pls')) {
-                console.log('Detected playlist file, fetching and parsing:', url);
-                try {
-                    const response = await fetch(url);
-                    if (!response.ok) throw new Error(`Failed to fetch playlist: ${response.statusText}`);
-                    const text = await response.text();
-                    const lines = text.split('\n');
-                    let foundStreamUrl = false;
-                    for (const line of lines) {
-                        if (line.trim().startsWith('http')) {
-                            url = line.trim();
-                            foundStreamUrl = true;
-                            console.log('Extracted stream URL from playlist:', url);
-                            break;
-                        }
-                    }
-                    if (!foundStreamUrl) throw new Error('No valid stream URL found in playlist file');
-                } catch (error) {
-                    console.error('Failed to parse playlist:', error);
-                    continue; // Try the next URL
-                }
-            }
-
-            // Test the stream URL
-            if (!SKIP_STREAM_TEST) {
-                console.log('Testing stream URL:', url);
-                if (await testStream(url)) {
-                    workingUrl = url;
+        let url = station.url_resolved || station.url;
+        console.log('Resolved URL:', url);
+        if (url.endsWith('.m3u') || url.endsWith('.pls')) {
+            console.log('Fetching playlist file:', url);
+            const response = await fetch(url);
+            if (!response.ok) throw new Error(`Failed to fetch playlist: ${response.statusText}`);
+            const text = await response.text();
+            const lines = text.split('\n');
+            let foundStreamUrl = false;
+            for (const line of lines) {
+                if (line.trim().startsWith('http')) {
+                    url = line.trim();
+                    foundStreamUrl = true;
+                    console.log('Found stream URL in playlist:', url);
                     break;
-                } else {
-                    console.warn(`Stream test failed for URL: ${url}`);
-                    continue; // Try the next URL
                 }
-            } else {
-                workingUrl = url;
-                break; // Skip testing and use the first URL
             }
+            if (!foundStreamUrl) throw new Error('No valid stream URL found in playlist');
         }
 
-        if (!workingUrl) {
-            throw new Error('No working stream URL found after testing all available URLs');
+        if (!SKIP_STREAM_TEST) {
+            const isStreamValid = await testStream(url);
+            if (!isStreamValid) throw new Error('Stream test failed: URL is not playable.');
         }
 
-        console.log('Playing live URL:', workingUrl);
-        audio.src = workingUrl;
+        audio.src = url;
         audio.volume = document.getElementById('volume').value;
-
-        await new Promise((resolve, reject) => {
-            const timeout = setTimeout(() => reject(new Error('Stream loading timed out after 10 seconds')), 10000);
-            audio.addEventListener('canplay', () => {
-                clearTimeout(timeout);
-                resolve();
-            }, { once: true });
-            audio.addEventListener('error', (e) => {
-                clearTimeout(timeout);
-                reject(new Error(`Failed to load stream: ${getAudioErrorMessage(e)}`));
-            }, { once: true });
-            audio.load();
-        });
-
-        currentStation = station;
-        await audio.play().catch(err => {
-            throw new Error(`Playback failed: ${err.message}`);
-        });
+        console.log('Starting playback...', { url, volume: audio.volume });
+        await audio.play();
         isPlaying = true;
-
+        hasError = false;
         const stationIndex = stations.indexOf(station);
-        document.getElementById('stationSelect').value = stationIndex;
-
+        if (stationIndex !== -1) document.getElementById('stationSelect').value = stationIndex;
+        clearError();
         updatePlayerDisplay();
         updateMediaSession();
-        await showRadioNotification(station);
+        localStorage.setItem('lastStation', JSON.stringify(station));
+        console.log('Station playing successfully:', station.name);
     } catch (error) {
-        console.error('Play error:', error);
+        console.error('Failed to play station:', error.message, { station });
         hasError = true;
-        if (currentUrlIndex < (urlsToTry.length - 1)) {
-            // Try the next URL if available
-            showError(`Failed to play ${station.name} with current URL.\nTrying next URL...`, false);
-            attemptReconnect();
-        } else {
-            // No more URLs to try, skip to the next station
-            showError(`Can't play ${station.name}.\n${error.message}\nSkipping to the next station...`, false);
-            nextStation();
-        }
+        isPlaying = false;
+        showError(`We couldn’t play ${station.name}.\nIt might be offline—please choose another station or try the fallback!`);
     } finally {
-        if (!isRetrying) {
-            showLoading(false);
-        }
+        showLoading(false);
     }
 }
 
 function showLoading(show) {
     const loading = document.getElementById('loading');
-    const player = document.querySelector('.player');
-    
-    if (!loading || !player) {
-        console.error('Loading or player element not found in DOM');
+    if (!loading) {
+        console.error('Loading element not found in DOM');
         return;
     }
-
+    isLoading = show;
     loading.style.display = show ? 'block' : 'none';
-    player.classList.toggle('connecting', show);
-    console.log(`Loading state updated: ${show ? 'Showing' : 'Hiding'} connecting message`);
+    loading.setAttribute('aria-busy', show ? 'true' : 'false');
+    console.log('Loading state changed:', show ? 'Shown' : 'Hidden');
 }
 
-function showError(message, showRetry = false) {
+function showError(message) {
     const errorContainer = document.getElementById('errorContainer');
-    if (!message) {
+    if (!errorContainer) {
+        console.error('Error container not found in DOM');
+        return;
+    }
+    if (!message || (lastError.message === message && !isLoading)) return;
+
+    if (errorDebounceTimeout) clearTimeout(errorDebounceTimeout);
+    errorDebounceTimeout = setTimeout(() => {
         errorContainer.innerHTML = '';
-        lastError = { message: null, showRetry: false };
-        return;
-    }
-
-    if (lastError.message === message && lastError.showRetry === showRetry) {
-        return;
-    }
-
-    lastError = { message, showRetry };
-    const errorDiv = document.createElement('div');
-    errorDiv.className = 'error-container';
-
-    const errorMessage = document.createElement('div');
-    errorMessage.className = 'error';
-    errorMessage.textContent = message;
-    errorDiv.appendChild(errorMessage);
-
-    if (showRetry) {
-        const retryButton = document.createElement('button');
-        retryButton.className = 'retry-button';
-        retryButton.innerHTML = `
-            <span class="retry-text">Retry</span>
-            <span class="spinner"><i class="fas fa-spinner fa-spin"></i></span>
-        `;
-        retryButton.addEventListener('click', async () => {
-            if (isRetrying) return;
-            isRetrying = true;
-            retryButton.classList.add('loading');
-            retryButton.disabled = true;
-
-            try {
-                if (currentStation) {
-                    await playStation(currentStation);
-                } else {
-                    const countryCode = document.getElementById('countrySelect').value;
-                    if (countryCode) {
-                        await fetchAndDisplayAllStations(countryCode);
-                    } else {
-                        await initializeApp();
-                    }
-                }
-            } catch (error) {
-                console.error('Retry failed:', error);
-                showError(`Retry failed.\n${error.message}`, true);
-            } finally {
-                isRetrying = false;
-                retryButton.classList.remove('loading');
-                retryButton.disabled = false;
-            }
-        });
-        errorDiv.appendChild(retryButton);
-    }
-
-    errorContainer.innerHTML = '';
-    errorContainer.appendChild(errorDiv);
+        const errorDiv = document.createElement('div');
+        errorDiv.className = 'error-container';
+        const errorMessage = document.createElement('div');
+        errorMessage.className = 'error';
+        errorMessage.textContent = message;
+        errorDiv.appendChild(errorMessage);
+        errorContainer.appendChild(errorDiv);
+        lastError = { message };
+        hasError = true;
+        console.warn('Error displayed:', message);
+        updatePlayerDisplay();
+    }, 250);
 }
 
 function clearError() {
-    showError('');
+    const errorContainer = document.getElementById('errorContainer');
+    if (!errorContainer) return;
+    if (errorDebounceTimeout) clearTimeout(errorDebounceTimeout);
+    errorContainer.innerHTML = '';
+    lastError = { message: null };
+    hasError = false;
+    console.log('Error cleared');
+    updatePlayerDisplay();
 }
 
 function updatePlayerDisplay() {
@@ -896,182 +597,160 @@ function updatePlayerDisplay() {
     const nextBtn = document.getElementById('nextBtn');
     const nowPlaying = document.getElementById('nowPlaying');
     const span = nowPlaying.querySelector('span');
-    
     playPauseBtn.innerHTML = isPlaying ? '<i class="fas fa-pause"></i>' : '<i class="fas fa-play"></i>';
-    playPauseBtn.disabled = !currentStation;
-    playPauseBtn.classList.toggle('active', isPlaying && currentStation);
-    stopBtn.disabled = !currentStation;
-
+    playPauseBtn.disabled = !currentStation || isOffline;
+    stopBtn.disabled = !currentStation || isOffline;
     const currentIndex = currentStation ? stations.indexOf(currentStation) : -1;
-    previousBtn.disabled = !currentStation || stations.length <= 1 || currentIndex === 0;
-    nextBtn.disabled = !currentStation || stations.length <= 1 || currentIndex === stations.length - 1;
-
+    previousBtn.disabled = !currentStation || stations.length <= 1 || currentIndex === 0 || isOffline;
+    nextBtn.disabled = !currentStation || stations.length <= 1 || currentIndex === stations.length - 1 || currentIndex === -1 || isOffline;
     if (currentStation) {
-        const text = isRetrying 
-            ? `Connecting to ${currentStation.name} (Attempt ${reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS})`
-            : `Now Playing: ${currentStation.name}${currentStation.language ? ` (${normalizeLanguage(currentStation.language)})` : ''}`;
-        span.textContent = text;
+        span.textContent = `Now Playing: ${currentStation.name}${currentStation.language ? ` (${normalizeLanguage(currentStation.language)})` : ''}`;
         const isOverflowing = span.scrollWidth > nowPlaying.clientWidth;
         nowPlaying.classList.toggle('overflowing', isOverflowing);
-        nowPlaying.classList.toggle('playing', isPlaying && !isRetrying);
+        nowPlaying.classList.toggle('playing', isPlaying);
     } else {
         span.textContent = 'Select a station to play';
         nowPlaying.classList.remove('playing', 'overflowing');
     }
+    console.log('Player display updated', { isPlaying, currentStation: currentStation?.name });
 }
 
 function startHeartbeat() {
     stopHeartbeat();
     heartbeatTimer = setInterval(() => {
-        console.log('Heartbeat: Checking stream status...');
-        if (!isPlaying || hasError) {
+        if (!isPlaying && !isManuallyPaused && !hasError) {
+            console.warn('Heartbeat detected playback stopped unexpectedly');
             stopHeartbeat();
-            attemptReconnect();
+            isPlaying = false;
+            if (currentStation) {
+                showError(isOffline ? 'You are offline!\nPlease check your internet connection.' : `The music cut out on ${currentStation.name}.\nPlease pick a station to keep going!`);
+            }
+            updatePlayerDisplay();
         }
     }, HEARTBEAT_INTERVAL);
+    console.log('Heartbeat started');
 }
 
 function stopHeartbeat() {
     if (heartbeatTimer) {
         clearInterval(heartbeatTimer);
         heartbeatTimer = null;
-    }
-}
-
-async function attemptReconnect() {
-    if (!currentStation) {
-        console.log('No current station to reconnect to.');
-        return;
-    }
-
-    if (reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
-        console.log('Max reconnect attempts reached for current URL, checking for alternative URLs...');
-        const urlsToTry = [currentStation.url_resolved || currentStation.url];
-        if (currentStation.url_alt && Array.isArray(currentStation.url_alt)) {
-            urlsToTry.push(...currentStation.url_alt.filter(url => url && url.startsWith('http')));
-        }
-
-        if (currentUrlIndex < urlsToTry.length - 1) {
-            // Try the next URL
-            currentUrlIndex++;
-            reconnectAttempts = 0; // Reset attempts for the new URL
-            showError(`Failed to reconnect to ${currentStation.name} with current URL.\nTrying next URL...`, false);
-            await playStation(currentStation);
-        } else {
-            // No more URLs to try, skip to the next station
-            isPlaying = false;
-            hasError = true;
-            isRetrying = false;
-            showError(`Failed to play ${currentStation.name} after trying all URLs.\nSkipping to the next station...`, false);
-            showLoading(false);
-            nextStation();
-        }
-        return;
-    }
-
-    reconnectAttempts++;
-    const delay = Math.min(BASE_RECONNECT_DELAY + (reconnectAttempts - 1) * DELAY_INCREMENT, MAX_RECONNECT_DELAY);
-    console.log(`Attempting to reconnect (${reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS}), waiting ${delay}ms...`);
-
-    isRetrying = true;
-    showLoading(true);
-    updatePlayerDisplay();
-
-    await new Promise(resolve => setTimeout(resolve, delay));
-
-    try {
-        await playStation(currentStation);
-    } catch (error) {
-        console.error(`Reconnect attempt ${reconnectAttempts} failed:`, error);
-        if (reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
-            attemptReconnect();
-        }
+        console.log('Heartbeat stopped');
     }
 }
 
 function stopPlayback() {
+    console.log('Stopping playback...');
+    isStopping = true;
     audio.pause();
     audio.src = '';
-    audio.currentTime = 0;
+    audio.load();
     isPlaying = false;
+    isManuallyPaused = false;
+
+    const stationSelect = document.getElementById('stationSelect');
+    stationSelect.value = ''; // Reset to "Select Station"
+
     currentStation = null;
     stopHeartbeat();
     updatePlayerDisplay();
     clearError();
-    closeNotification();
-    const stationSelect = document.getElementById('stationSelect');
-    stationSelect.value = '';
+    localStorage.removeItem('lastStation');
+    setTimeout(() => { isStopping = false; }, 100);
+    showError('The playback has been interrupted.');
 }
 
 function previousStation() {
+    if (isOffline) {
+        console.warn('Offline, skipping previous station');
+        return;
+    }
     const stationSelect = document.getElementById('stationSelect');
     const currentIndex = parseInt(stationSelect.value, 10);
     if (currentIndex > 0) {
+        console.log('Switching to previous station', { currentIndex });
         stationSelect.value = currentIndex - 1;
-        const station = stations[currentIndex - 1];
-        playStation(station);
+        playStation(stations[currentIndex - 1]);
+    } else {
+        console.log('No previous station available');
     }
 }
 
 function nextStation() {
+    if (isOffline) {
+        console.warn('Offline, skipping next station');
+        return;
+    }
     const stationSelect = document.getElementById('stationSelect');
     const currentIndex = parseInt(stationSelect.value, 10);
-    if (currentIndex < stations.length - 1) {
-        stationSelect.value = currentIndex + 1;
-        const station = stations[currentIndex + 1];
-        playStation(station);
-    } else {
-        // If at the end of the list, loop back to the first station
+    if (isNaN(currentIndex) || currentIndex < 0) {
+        console.log('No current station, starting from first');
         stationSelect.value = 0;
-        const station = stations[0];
-        playStation(station);
+        playStation(stations[0]);
+    } else if (currentIndex < stations.length - 1) {
+        console.log('Switching to next station', { currentIndex });
+        stationSelect.value = currentIndex + 1;
+        playStation(stations[currentIndex + 1]);
+    } else {
+        console.log('Reached end, looping to first station');
+        stationSelect.value = 0;
+        playStation(stations[0]);
     }
 }
 
 document.getElementById('stationSelect').addEventListener('change', (e) => {
     const index = parseInt(e.target.value, 10);
-    if (!isNaN(index)) {
-        const station = stations[index];
-        playStation(station);
+    if (!isNaN(index) && index >= 0 && index < stations.length) {
+        console.log('Station selected from dropdown:', stations[index].name);
+        playStation(stations[index]);
     }
 });
 
 document.getElementById('playPauseBtn').addEventListener('click', async () => {
     if (!currentStation) {
-        showError('No station selected.\nPlease select a station to play.', true);
+        console.warn('No station selected for play/pause');
+        showError('No station picked yet!\nPlease choose one to start the music.');
         return;
     }
-
+    if (isOffline) {
+        console.warn('Offline, cannot play/pause');
+        showError('You are offline!\nPlease check your internet connection.');
+        return;
+    }
     try {
         if (isPlaying) {
+            console.log('Pausing audio...');
             audio.pause();
             isPlaying = false;
+            isManuallyPaused = true;
             stopHeartbeat();
-            console.log('Paused audio');
+            clearError();
+            showError('Paused! Click play to resume');
+            updatePlayerDisplay();
         } else {
-            console.log('Starting live playback for station');
+            console.log('Resuming audio...');
             await playStation(currentStation);
         }
-        updatePlayerDisplay();
     } catch (error) {
-        console.error('Play/pause error:', error);
+        console.error('Play/pause error:', error.message);
         hasError = true;
-        showError(`Playback issue.\n${error.message}\nTry again or switch stations.`, true);
         isPlaying = false;
-        updatePlayerDisplay();
+        showError('Something went wrong with the music.\nPlease try again or switch stations!');
     }
 });
 
 document.getElementById('stopBtn').addEventListener('click', () => {
+    console.log('Stop button clicked');
     stopPlayback();
-    showError('Playback stopped.', false);
 });
 
 document.getElementById('previousBtn').addEventListener('click', () => {
+    console.log('Previous button clicked');
     previousStation();
 });
 
 document.getElementById('nextBtn').addEventListener('click', () => {
+    console.log('Next button clicked');
     nextStation();
 });
 
@@ -1082,10 +761,12 @@ document.getElementById('muteBtn').addEventListener('click', () => {
         audio.muted = false;
         muteBtn.innerHTML = '<i class="fas fa-volume-up"></i>';
         volume.value = audio.volume;
+        console.log('Unmuted audio', { volume: audio.volume });
     } else {
         audio.muted = true;
         muteBtn.innerHTML = '<i class="fas fa-volume-mute"></i>';
         volume.value = 0;
+        console.log('Muted audio');
     }
     document.getElementById('volumeLevel').textContent = `${Math.round(audio.volume * 100)}%`;
 });
@@ -1096,64 +777,87 @@ document.getElementById('volume').addEventListener('input', (e) => {
     audio.muted = volume === '0';
     document.getElementById('muteBtn').innerHTML = audio.muted ? '<i class="fas fa-volume-mute"></i>' : '<i class="fas fa-volume-up"></i>';
     document.getElementById('volumeLevel').textContent = `${Math.round(volume * 100)}%`;
+    console.log('Volume adjusted', { volume });
 });
 
 window.addEventListener('online', async () => {
-    console.log('Network restored.');
-    if (currentStation && !isPlaying) {
-        console.log('Attempting to automatically resume playback...');
-        await playStation(currentStation);
+    isOffline = false;
+    console.log('Network restored');
+    clearError();
+    if (currentStation && !isManuallyPaused) {
+        console.log('Attempting to resume playback after reconnect...');
+        await playStation(currentStation).catch((err) => {
+            console.error('Resume failed after reconnect:', err.message);
+            showError('You’re back online, but the station isn’t playing.\nTry again or pick a new one!');
+        });
+    } else {
+        showError('You’re back online!\nPlease choose a station to start the music.\nPlay button to resume playback.');
     }
+    updatePlayerDisplay();
 });
 
 window.addEventListener('offline', () => {
-    console.log('Network lost, stopping playback...');
-    if (isPlaying) {
-        audio.pause();
+    isOffline = true;
+    console.warn('Network lost');
+    if (!isManuallyPaused) {
         isPlaying = false;
+        if (audio.played.length > 0) audio.pause();
+        stopHeartbeat();
+        showError('You are offline!\nPlease check your internet connection.');
         updatePlayerDisplay();
-        showError('Network disconnected.\nPlease reconnect and select a station to resume.', false);
     }
 });
 
+setInterval(() => {
+    const newOnlineStatus = navigator.onLine;
+    if (newOnlineStatus && isOffline) {
+        console.log('Online status changed to online');
+        window.dispatchEvent(new Event('online'));
+    } else if (!newOnlineStatus && !isOffline) {
+        console.log('Online status changed to offline');
+        window.dispatchEvent(new Event('offline'));
+    }
+    isOffline = !newOnlineStatus;
+}, 1000);
+
 document.addEventListener('DOMContentLoaded', () => {
-    console.log('DOM fully loaded, initializing app...');
-    if (document.readyState === 'complete' || document.readyState === 'interactive') {
-        initializeApp();
+    isOffline = !navigator.onLine;
+    console.log('DOM loaded, initial offline status:', isOffline);
+    if (isOffline) {
+        showError('You are offline!\nPlease check your internet connection.');
+        window.addEventListener('online', () => initializeApp(), { once: true });
     } else {
-        window.addEventListener('load', initializeApp, { once: true });
+        initializeApp();
     }
 });
+
+window.onerror = (msg, url, line, col, error) => {
+    console.error(`Uncaught error: ${msg}`, { url, line, col, details: error });
+    showError(isOffline ? 'You are offline!\nPlease check your internet connection.' : 'The app hit a snag.\nPlease refresh the page.');
+};
 
 if ('serviceWorker' in navigator) {
     navigator.serviceWorker.register('/sw.js')
-        .then(reg => console.log('Service Worker registered', reg))
-        .catch(err => console.error('Service Worker registration failed', err));
-
+        .then(reg => console.log('Service Worker registered:', reg.scope))
+        .catch(err => console.error('Service Worker registration failed:', err.message));
     navigator.serviceWorker.addEventListener('message', (event) => {
         const { action } = event.data;
+        console.log('Service Worker message received:', action);
         switch (action) {
             case 'play':
-                if (currentStation && !isPlaying) {
-                    audio.play().then(() => {
-                        isPlaying = true;
-                        updatePlayerDisplay();
-                        startHeartbeat();
-                        showRadioNotification(currentStation);
-                    }).catch(err => {
-                        console.error('Service Worker play failed:', err);
-                        showError(`Can't start playback.\n${err.message}`, true);
-                    });
-                }
+                if (currentStation && !isPlaying && !isOffline) playStation(currentStation);
                 break;
             case 'pause':
                 if (isPlaying) {
                     audio.pause();
                     isPlaying = false;
+                    isManuallyPaused = true;
                     stopHeartbeat();
                     updatePlayerDisplay();
-                    showRadioNotification(currentStation);
                 }
+                break;
+            case 'stop':
+                stopPlayback();
                 break;
             case 'previous':
                 previousStation();
