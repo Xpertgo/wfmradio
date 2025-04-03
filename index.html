@@ -39,10 +39,10 @@
             </div>
         </div>
 
-        <div class="loading" id="loading" aria-live="polite">
+        <div class="loading" id="loading" aria-live="polite" aria-busy="false">
             <i class="fas fa-spinner fa-spin"></i> Loading...
         </div>
-        <div id="errorContainer" aria-live="assertive"></div>
+        <div id="errorContainer" role="alert" aria-live="assertive"></div>
 
         <div class="player">
             <div class="now-playing" id="nowPlaying"><span>Select a station to play</span></div>
@@ -61,6 +61,7 @@
     </div>
 
     <script defer src="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/js/all.min.js"></script>
-    <script src="script.js"></script>
+    
+    <script type="module" src="script.js"></script>
 </body>
 </html>
